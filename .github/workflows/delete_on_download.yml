@@ -1,0 +1,108 @@
+# FILE: automation/.github/workflows/delete_on_download.yml
+name: Delete PDF after email
+
+on:
+  repository_dispatch:
+    types: [delete-pdf-after-email]
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: Project row id (projects.id)
+        required: true
+        type: string
+      storage_path:
+        description: Storage path of the PDF object
+        required: true
+        type: string
+      db_num:
+        description: Generated-PDFs project number (1-4)
+        required: true
+        type: string
+
+jobs:
+  delete:
+    name: Delete PDF after email
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Delete PDF
+        working-directory: scripts
+        env:
+          PROJECT_ID: ${{ github.event.client_payload.project_id || inputs.project_id }}
+          STORAGE_PATH: ${{ github.event.client_payload.storage_path || inputs.storage_path }}
+          DB_NUM: ${{ github.event.client_payload.db_num || inputs.db_num }}
+          SB_USERS1_URL: ${{ secrets.SB_USERS1_URL }}
+          SB_USERS1_ANON_KEY: ${{ secrets.SB_USERS1_ANON_KEY }}
+          SB_USERS1_SERVICE_KEY: ${{ secrets.SB_USERS1_SERVICE_KEY }}
+          SB_USERS1_REF: ${{ secrets.SB_USERS1_REF }}
+          SB_USERS2_URL: ${{ secrets.SB_USERS2_URL }}
+          SB_USERS2_ANON_KEY: ${{ secrets.SB_USERS2_ANON_KEY }}
+          SB_USERS2_SERVICE_KEY: ${{ secrets.SB_USERS2_SERVICE_KEY }}
+          SB_USERS2_REF: ${{ secrets.SB_USERS2_REF }}
+          SB_ASCI_URL: ${{ secrets.SB_ASCI_URL }}
+          SB_ASCI_ANON_KEY: ${{ secrets.SB_ASCI_ANON_KEY }}
+          SB_ASCI_SERVICE_KEY: ${{ secrets.SB_ASCI_SERVICE_KEY }}
+          SB_ASCI_REF: ${{ secrets.SB_ASCI_REF }}
+          SB_ACOM_URL: ${{ secrets.SB_ACOM_URL }}
+          SB_ACOM_ANON_KEY: ${{ secrets.SB_ACOM_ANON_KEY }}
+          SB_ACOM_SERVICE_KEY: ${{ secrets.SB_ACOM_SERVICE_KEY }}
+          SB_ACOM_REF: ${{ secrets.SB_ACOM_REF }}
+          SB_AART_URL: ${{ secrets.SB_AART_URL }}
+          SB_AART_ANON_KEY: ${{ secrets.SB_AART_ANON_KEY }}
+          SB_AART_SERVICE_KEY: ${{ secrets.SB_AART_SERVICE_KEY }}
+          SB_AART_REF: ${{ secrets.SB_AART_REF }}
+          SB_OSCI_URL: ${{ secrets.SB_OSCI_URL }}
+          SB_OSCI_ANON_KEY: ${{ secrets.SB_OSCI_ANON_KEY }}
+          SB_OSCI_SERVICE_KEY: ${{ secrets.SB_OSCI_SERVICE_KEY }}
+          SB_OSCI_REF: ${{ secrets.SB_OSCI_REF }}
+          SB_OCOM_URL: ${{ secrets.SB_OCOM_URL }}
+          SB_OCOM_ANON_KEY: ${{ secrets.SB_OCOM_ANON_KEY }}
+          SB_OCOM_SERVICE_KEY: ${{ secrets.SB_OCOM_SERVICE_KEY }}
+          SB_OCOM_REF: ${{ secrets.SB_OCOM_REF }}
+          SB_OART_URL: ${{ secrets.SB_OART_URL }}
+          SB_OART_ANON_KEY: ${{ secrets.SB_OART_ANON_KEY }}
+          SB_OART_SERVICE_KEY: ${{ secrets.SB_OART_SERVICE_KEY }}
+          SB_OART_REF: ${{ secrets.SB_OART_REF }}
+          SB_PDF1_URL: ${{ secrets.SB_PDF1_URL }}
+          SB_PDF1_ANON_KEY: ${{ secrets.SB_PDF1_ANON_KEY }}
+          SB_PDF1_SERVICE_KEY: ${{ secrets.SB_PDF1_SERVICE_KEY }}
+          SB_PDF1_REF: ${{ secrets.SB_PDF1_REF }}
+          SB_PDF2_URL: ${{ secrets.SB_PDF2_URL }}
+          SB_PDF2_ANON_KEY: ${{ secrets.SB_PDF2_ANON_KEY }}
+          SB_PDF2_SERVICE_KEY: ${{ secrets.SB_PDF2_SERVICE_KEY }}
+          SB_PDF2_REF: ${{ secrets.SB_PDF2_REF }}
+          SB_PDF3_URL: ${{ secrets.SB_PDF3_URL }}
+          SB_PDF3_ANON_KEY: ${{ secrets.SB_PDF3_ANON_KEY }}
+          SB_PDF3_SERVICE_KEY: ${{ secrets.SB_PDF3_SERVICE_KEY }}
+          SB_PDF3_REF: ${{ secrets.SB_PDF3_REF }}
+          SB_PDF4_URL: ${{ secrets.SB_PDF4_URL }}
+          SB_PDF4_ANON_KEY: ${{ secrets.SB_PDF4_ANON_KEY }}
+          SB_PDF4_SERVICE_KEY: ${{ secrets.SB_PDF4_SERVICE_KEY }}
+          SB_PDF4_REF: ${{ secrets.SB_PDF4_REF }}
+          SB_APIKEYS_URL: ${{ secrets.SB_APIKEYS_URL }}
+          SB_APIKEYS_ANON_KEY: ${{ secrets.SB_APIKEYS_ANON_KEY }}
+          SB_APIKEYS_SERVICE_KEY: ${{ secrets.SB_APIKEYS_SERVICE_KEY }}
+          SB_APIKEYS_REF: ${{ secrets.SB_APIKEYS_REF }}
+          SB_APK_URL: ${{ secrets.SB_APK_URL }}
+          SB_APK_ANON_KEY: ${{ secrets.SB_APK_ANON_KEY }}
+          SB_APK_SERVICE_KEY: ${{ secrets.SB_APK_SERVICE_KEY }}
+          SB_APK_REF: ${{ secrets.SB_APK_REF }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RESEND_FROM_EMAIL: ${{ secrets.RESEND_FROM_EMAIL }}
+          MAIN_SITE_URL: ${{ secrets.MAIN_SITE_URL }}
+          ADMIN_SITE_URL: ${{ secrets.ADMIN_SITE_URL }}
+          GEMINI_API_KEY_1: ${{ secrets.GEMINI_API_KEY_1 }}
+          KIE_API_KEY_1: ${{ secrets.KIE_API_KEY_1 }}
+        run: python delete_pdf.py

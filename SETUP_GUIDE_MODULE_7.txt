@@ -1,0 +1,133 @@
+# FILE: automation/SETUP_GUIDE_MODULE_7.txt
+================================================================================
+MODULE 7 - AUTOMATION CORE ROUTING - SETUP GUIDE
+================================================================================
+
+1. PURPOSE
+--------------------------------------------------------------------------------
+Module 7 delivers the two foundational Python modules of the Opus Zim automation
+package:
+
+  * SupabaseRouter  - routes every automation call to the correct Supabase
+                      project (Users 1/2, the four content projects, the four
+                      Generated-PDFs projects, Our-API-Keys, APK hosting), reads
+                      and writes system_config, and auto-rotates PDF storage
+                      when a project reaches 450 MB.
+  * APIKeyManager   - selects and meters provider API keys from the api_keys
+                      table on Our-API-Keys: unlimited Gemini keys tried in
+                      fallback order, metered Kie AI keys that respect
+                      max_usage, plus error tracking and deactivation.
+
+Every other automation module imports these exact signatures. All connections
+use service_role credentials and therefore bypass RLS.
+
+2. FILES DELIVERED
+--------------------------------------------------------------------------------
+  automation/scripts/supabase_client.py   SupabaseRouter (multi-project router)
+  automation/scripts/api_key_manager.py   APIKeyManager (key rotation)
+  automation/SETUP_GUIDE_MODULE_7.txt     This guide
+  automation/SETUP_MODULE_7.cmd           Local validation script
+
+3. PREREQUISITES
+--------------------------------------------------------------------------------
+  * Python 3.11
+  * supabase-py v2 installed (declared by Module 11's requirements.txt - do not
+    create requirements.txt in this module)
+  * The 14 Supabase projects created in earlier modules, with the repository
+    secrets from Module 3 populated:
+        SB_{PREFIX}_URL
+        SB_{PREFIX}_ANON_KEY
+        SB_{PREFIX}_SERVICE_KEY
+        SB_{PREFIX}_REF
+    for each of the 14 prefixes:
+        USERS1 USERS2 ASCI ACOM AART OSCI OCOM OART
+        PDF1 PDF2 PDF3 PDF4 APIKEYS APK
+    Module 7 itself reads ONLY SB_{PREFIX}_URL and SB_{PREFIX}_SERVICE_KEY.
+  * Our-API-Keys must contain the system_config table (config_key,
+    config_value, updated_at) and the api_keys table.
+  * Each Generated-PDFs project must have a storage bucket named
+    'generated-pdfs' containing the 'pdfs' path.
+  * SETUP_CONFIG.txt present at the repository root.
+
+4. MANUAL STEPS
+--------------------------------------------------------------------------------
+NONE, apart from ensuring the automation repo secrets from Module 3 are set.
+
+No dashboard clicks, SQL statements or bucket changes are required by this
+module. If the Module 3 secrets are in place, Module 7 works as delivered.
+
+5. VERIFICATION
+--------------------------------------------------------------------------------
+Export the SB_* variables (or run inside GitHub Actions where the secrets are
+already injected), then run both self-tests:
+
+    python automation/scripts/supabase_client.py
+    python automation/scripts/api_key_manager.py
+
+Expected printed output from supabase_client.py:
+
+    Active users DB number: 1
+    Active PDF storage DB number: 1
+    Usable gemini keys: <count of active gemini rows>
+    Usable kie keys: <count of kie rows with usage_count < max_usage>
+
+Expected printed output from api_key_manager.py:
+
+    Active users DB number: 1
+    Active PDF storage DB number: 1
+    Usable gemini keys: <count of active gemini rows>
+    Usable kie keys (at least): 1
+
+The numbers 1 and 1 are the defaults when system_config has no
+'active_users_db' / 'active_pdf_storage_db' rows yet; they will show the stored
+values once rotation has occurred. Log lines are written to stderr and never
+include any key, token or service-role value.
+
+You can also run automation/SETUP_MODULE_7.cmd on Windows to confirm the config
+variables and both Python files are present.
+
+6. TROUBLESHOOTING
+--------------------------------------------------------------------------------
+RuntimeError: Missing required environment variable: SB_XXXX_URL
+  The named variable (or its _SERVICE_KEY partner) is not exported. Add it to
+  SETUP_CONFIG.txt for local runs, and to the repository secrets from Module 3
+  for GitHub Actions runs. The error always names the exact variable required,
+  so add precisely that one and re-run.
+
+RuntimeError: No usable Kie AI API key (all exhausted or inactive)
+  Every provider='kie' row is either is_active = FALSE or has
+  usage_count >= max_usage. Insert a fresh Kie key into Our-API-Keys.api_keys,
+  or raise max_usage / reset usage_count on an existing row and set
+  is_active = TRUE. Rows auto-deactivated by mark_kie_success carry the note
+  suffix " | auto-deactivated: quota reached".
+
+RuntimeError: No active Gemini API key found in Our-API-Keys.api_keys
+  There are no provider='gemini' rows with is_active = TRUE. Add one, or
+  re-activate a row that was disabled by deactivate_key (note suffix
+  " | deactivated: repeated failures").
+
+Storage rotation not switching (active_pdf_storage_db stuck)
+  get_pdf_storage_client() only advances when
+  check_pdf_storage_usage(active) >= 450 MB. Check that:
+    - the 'generated-pdfs' bucket and 'pdfs' path exist on the active project
+      (an empty or wrong bucket reports 0.00 MB, so no rotation is needed);
+    - the service key for the target PDF project is present, otherwise the
+      usage check for that project raises a missing-variable RuntimeError;
+    - the service_role key is used, not the anon key - anon cannot list objects;
+    - set_config succeeded: SELECT * FROM system_config
+      WHERE config_key = 'active_pdf_storage_db' on Our-API-Keys and confirm
+      updated_at moved. If all four projects are >= 450 MB a CRITICAL log line
+      is emitted and the least-full project is returned instead of crashing.
+
+ValueError from an unmapped subject_code
+  get_subject_client accepts a bare code (e.g. "MATH") with level "O Level" /
+  "A Level", or a full subject_code (e.g. "OLEVEL_MATH"). The 9 valid codes are
+  MATH GEOG COMP AGRI TTD HIST BIO PHYS CHEM. A bare code with no level, an
+  unknown level string, or a code outside that list raises ValueError naming the
+  valid options. Note that OCOM and ACOM are reserved projects and map to no
+  subject_code, so no subject will ever route to them.
+
+ValueError: active_users_db must be 1 or 2 / active_pdf_storage_db must be
+between 1 and 4
+  A bad value was written into system_config. Correct the row on Our-API-Keys.
+================================================================================

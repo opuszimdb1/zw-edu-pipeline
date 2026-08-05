@@ -1,0 +1,168 @@
+# FILE: automation/SETUP_GUIDE_MODULE_9.txt
+================================================================================
+OPUS ZIM - SETUP GUIDE - MODULE 9: AUTOMATION PDF LAYER
+================================================================================
+
+1. PURPOSE
+--------------------------------------------------------------------------------
+Module 9 is the rendering layer of the Opus Zim automation pipeline. It takes the
+canonical project dictionary produced by Module 8 and turns it into a branded A4
+PDF document (cover page plus the six ZIMSEC project stages), and it renders
+page 1 of that PDF into an 800px-wide watermarked JPEG used as the public
+preview image.
+
+This module owns no configuration, no network calls and no database access. It is
+a pure transformation:
+
+    project dict (+ optional local image paths)  ->  PDF bytes
+    PDF bytes                                    ->  preview JPEG bytes
+
+Both operations run fully offline, which is why only reportlab's built-in
+Helvetica and Times-Roman font families are used. No font files ever need to be
+downloaded inside GitHub Actions.
+
+2. FILES DELIVERED
+--------------------------------------------------------------------------------
+  automation/scripts/pdf_generator.py
+      class OpusZimPDFGenerator
+          __init__(self, logo_path: str | None = None)
+          build(self, project_data: dict, image_paths: list[str]) -> bytes
+      Builds the document in memory (io.BytesIO) and returns raw PDF bytes.
+      Never writes a temporary file to disk.
+
+  automation/scripts/pdf_preview.py
+      generate_preview(pdf_bytes: bytes) -> bytes
+      Renders page 1 with PyMuPDF, converts to JPEG (quality 80) with Pillow,
+      composites a diagonal semi-transparent "PREVIEW" watermark, and returns
+      the JPEG bytes.
+
+  automation/SETUP_GUIDE_MODULE_9.txt
+      This document.
+
+  automation/SETUP_MODULE_9.cmd
+      Windows verifier: locates the repo root, checks both files exist, installs
+      reportlab / pymupdf / pillow, then runs both self-tests.
+
+  NOT delivered by this module: requirements.txt (owned by Module 11).
+
+3. PREREQUISITES
+--------------------------------------------------------------------------------
+  - Python 3.11
+  - SETUP_CONFIG.txt present at the repository root (used only to locate the
+    root; this module reads no specific config keys)
+  - Python packages: reportlab, pymupdf, pillow
+        python -m pip install reportlab pymupdf pillow
+    NOTE: the import name is "fitz" but the package name is "pymupdf".
+  - Module 8 (project data builder) if you want to render real projects. The
+    self-tests are self-contained and need nothing from Module 8.
+
+4. MANUAL STEPS
+--------------------------------------------------------------------------------
+  Place the branded logo PNG at:
+
+      frontend/main-site/public/opuszim-logo.png
+
+  The automation passes that path in as logo_path when the file is available. The
+  logo is drawn centred at the top of the cover page, scaled to a maximum width
+  of 4cm with aspect ratio preserved. If logo_path is None or the file does not
+  exist, the cover renders without a logo and no warning is surfaced to the end
+  user.
+
+  Beyond placing the logo: NONE.
+
+5. VERIFICATION
+--------------------------------------------------------------------------------
+  a) Run the two self-tests (either order; both are independent):
+
+        python automation/scripts/pdf_generator.py
+        python automation/scripts/pdf_preview.py
+
+     Each prints the PDF byte size, the JPEG byte size and the page count, and
+     writes /tmp/opuszim_sample.pdf and /tmp/opuszim_sample.jpg.
+
+     On Windows, run automation\SETUP_MODULE_9.cmd instead; it performs the
+     package install and both runs, printing a checkmark per step.
+
+  b) Open /tmp/opuszim_sample.pdf and confirm:
+        - Page 1 is the cover: "OPUS ZIM", the tagline "Empowering learners for
+          quality results", an accent rule, the project title, and the
+          Subject / Level / Year block.
+        - The cover carries NO header and NO page number.
+        - The cover disclaimer reads, verbatim and in italics:
+              Generated projects are intended for reference and learning
+              purposes only.
+        - Six stage sections follow, each starting on a NEW page, headed exactly:
+              1 INTRODUCTION / PROBLEM IDENTIFICATION
+              2 RESEARCH / RELATED IDEAS
+              3 POSSIBLE SOLUTIONS / CONCEPT DEVELOPMENT
+              4 DEVELOPMENT
+              5 PRESENTATION OF RESULTS
+              6 EVALUATION, CONCLUSION & RECOMMENDATIONS
+        - Sub-headings are bold and NEVER numbered.
+        - Every page after the cover has the header ("Opus Zim" left, truncated
+          project title right, thin rule beneath) and the footer ("Page {n}"
+          plus the disclaimer in 6.5pt).
+        - There is NO table of contents, NO bibliography, NO references section,
+          NO acknowledgements, and no placeholder or TODO text anywhere.
+        - Total length is roughly 6-12 pages.
+
+  c) Open /tmp/opuszim_sample.jpg and confirm:
+        - It is exactly 800 pixels wide (height follows the A4 aspect ratio,
+          about 1132px).
+        - It shows the cover page only.
+        - A large diagonal light-grey "PREVIEW" watermark is composited across
+          the image, so the preview cannot be passed off as the deliverable.
+
+  d) Optional image check: pass one or two real image file paths as the second
+     argument to build(). Each renders scaled to the text width (max height 9cm)
+     followed by a centred italic caption "Figure {i}: {caption}". Pass three
+     paths and confirm a logger warning is emitted and only two images render.
+     Pass a nonexistent path and confirm a warning is emitted and the build
+     still succeeds with no placeholder box.
+
+6. TROUBLESHOOTING
+--------------------------------------------------------------------------------
+  "ModuleNotFoundError: No module named 'fitz'"
+      You installed the wrong package. The import name is fitz, but the
+      distribution is PyMuPDF:
+          python -m pip install pymupdf
+      Do NOT install a package literally named "fitz" - it is unrelated and will
+      shadow nothing useful. If you already did, remove it:
+          python -m pip uninstall fitz
+      then reinstall pymupdf.
+
+  reportlab paragraph markup errors, e.g. "paraparser: syntax error" or
+  "unclosed tag"
+      Caused by unescaped ampersands or angle brackets in the project data
+      (a subject named "Design & Technology", or text containing "a < b").
+      All text must pass through the private helper _esc() before reaching
+      Paragraph. If you add a new field to the renderer, wrap it in _esc().
+      Never build Paragraph strings by concatenating raw project data.
+
+  Images overflow the frame, or you see
+  "Flowable ... too large on page ... in frame"
+      The image was not scaled. _scaled_image() fits every image to the frame's
+      text width and caps the height at 9cm with the aspect ratio preserved. If
+      you change MAX_IMAGE_HEIGHT, keep it below the printable height
+      (A4 height minus the 2cm top and bottom margins) or the flowable will not
+      fit. Very tall portrait images are height-capped, not width-capped -
+      that is intentional.
+
+  Blank or failed preview
+      A zero-page PDF raises RuntimeError("Cannot generate a preview: the PDF
+      has zero pages."). This means build() produced an empty story - check that
+      project_data is actually a dict with content, not None or an empty dict
+      wrapped in an outer envelope. A completely white preview with correct
+      dimensions usually means the cover flowables were all skipped because
+      every cover field was empty.
+
+  Watermark renders tiny
+      Pillow could not find a TrueType font and fell back to the default font;
+      a warning is logged. The preview is still valid. Install DejaVu fonts on
+      the runner (Ubuntu: fonts-dejavu-core) for a full-size watermark.
+
+  Preview is not 800px wide
+      generate_preview computes zoom = 800 / page.rect.width. If a caller
+      resizes the JPEG afterwards, that is outside this module. Do not change
+      PREVIEW_WIDTH without updating the frontend that consumes the image.
+================================================================================

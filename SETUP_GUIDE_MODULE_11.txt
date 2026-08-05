@@ -1,0 +1,167 @@
+# FILE: automation/SETUP_GUIDE_MODULE_11.txt
+
+================================================================================
+OPUS ZIM - SETUP GUIDE - MODULE 11: AUTOMATION ENTRY AND WORKFLOWS
+================================================================================
+
+1. PURPOSE
+--------------------------------------------------------------------------------
+Module 11 is the orchestration layer of Opus Zim. It provides the entrypoint
+scripts that glue Modules 7-10 together and the GitHub Actions workflows that
+run them:
+
+  * main.py runs the full 10-step generation pipeline for one project: it marks
+    the project 'generating', resolves the subject project, reads the Gemini
+    master prompt, downloads textbooks and the marking guide, generates the
+    content, parses it, optionally generates up to two Kie images, builds the
+    PDF, uploads the PDF and preview, inserts the generated_files row with a
+    24-hour deletion deadline, emails the PDF, marks the project 'completed' and
+    locks the chosen title in BOTH Users-Accounts projects.
+  * cleanup.py runs every 6 hours and permanently removes every PDF whose
+    24-hour retention window has expired.
+  * delete_pdf.py removes one specific PDF on demand after delivery.
+
+2. FILES DELIVERED
+--------------------------------------------------------------------------------
+  automation/scripts/main.py
+      Generation entrypoint. Reads its payload from environment variables only.
+  automation/scripts/cleanup.py
+      Scheduled retention sweep over PDF projects 1-4.
+  automation/scripts/delete_pdf.py
+      Single-file delete triggered after the email is delivered.
+  automation/scripts/requirements.txt
+      Pinned dependencies for Modules 7-11.
+  automation/.github/workflows/generate_pdf.yml
+      "Generate PDF" - repository_dispatch [generate-pdf] + workflow_dispatch.
+  automation/.github/workflows/cleanup_pdfs.yml
+      "Cleanup expired PDFs" - cron '0 */6 * * *' + workflow_dispatch.
+  automation/.github/workflows/delete_on_download.yml
+      "Delete PDF after email" - repository_dispatch [delete-pdf-after-email]
+      + workflow_dispatch.
+  automation/README.md
+      Public-repo documentation for the automation repository.
+  automation/SETUP_GUIDE_MODULE_11.txt
+      This guide.
+  automation/SETUP_MODULE_11.cmd
+      Local validation script for this module.
+
+3. PREREQUISITES
+--------------------------------------------------------------------------------
+  * Modules 7-10 are already present in automation/scripts:
+      supabase_client.py, api_key_manager.py, ai_client.py, image_generator.py,
+      response_parser.py, pdf_generator.py, pdf_preview.py, storage_manager.py,
+      email_sender.py
+  * SETUP_CONFIG.txt exists at the repository root and contains:
+      GITHUB_AUTO_USERNAME, GITHUB_AUTO_REPO_NAME, GITHUB_AUTO_TOKEN,
+      SB_APIKEYS_URL, SB_APIKEYS_SERVICE_KEY, RESEND_API_KEY
+  * The GITHUB_AUTO_TOKEN personal access token has the 'repo' and 'workflow'
+    scopes (the 'workflow' scope is required to dispatch these workflows).
+  * Python 3.11 is installed locally for the byte-compile check.
+  * All 60 GitHub Secrets are set on the automation repository:
+      SB_{P}_URL, SB_{P}_ANON_KEY, SB_{P}_SERVICE_KEY, SB_{P}_REF for each of
+      USERS1 USERS2 ASCI ACOM AART OSCI OCOM OART PDF1 PDF2 PDF3 PDF4 APIKEYS
+      APK, plus RESEND_API_KEY, RESEND_FROM_EMAIL, MAIN_SITE_URL,
+      ADMIN_SITE_URL, GEMINI_API_KEY_1, KIE_API_KEY_1.
+  * At least one active Gemini key and one active Kie key exist in the api_keys
+    table on the Our-API-Keys project.
+
+4. MANUAL STEPS
+--------------------------------------------------------------------------------
+  4.1 Confirm the automation repository is PUBLIC.
+      Open https://github.com/<GITHUB_AUTO_USERNAME>/<GITHUB_AUTO_REPO_NAME>
+      then Settings -> General -> scroll to "Danger Zone". The visibility must
+      read "Public". A public repository is required so that GitHub Actions
+      minutes are unlimited. Because it is public, NEVER commit a secret.
+
+  4.2 Confirm Actions are enabled.
+      Settings -> Actions -> General -> Actions permissions ->
+      select "Allow all actions and reusable workflows" -> Save.
+      Also confirm Workflow permissions is set to "Read and write permissions".
+
+  4.3 Confirm the secrets are present.
+      Settings -> Secrets and variables -> Actions. You should see the 60
+      secrets listed in section 3. Add any that are missing.
+
+  4.4 Trigger a manual test run.
+      a. Pick a real row from the projects table on the ACTIVE Users-Accounts
+         project and copy its id, user_id, subject_code, level and
+         project_title, plus the student's email.
+      b. Go to the repository's Actions tab.
+      c. Click "Generate PDF" in the left sidebar.
+      d. Click the "Run workflow" dropdown on the right.
+      e. Paste the six values into project_id, user_id, subject_code, level,
+         project_title and user_email.
+      f. Click the green "Run workflow" button.
+      g. Open the running job and watch the log.
+
+  4.5 Trigger the cleanup workflow once by hand.
+      Actions -> "Cleanup expired PDFs" -> Run workflow. It should complete even
+      when there is nothing to delete.
+
+5. VERIFICATION
+--------------------------------------------------------------------------------
+  [ ] The dispatched "Generate PDF" run finishes green and the log contains
+      every step from "STEP 1/10" through "STEP 10/10".
+  [ ] The projects row for that project_id now has status = 'completed',
+      generation_completed_at populated, pdf_url and pdf_storage_db set, and
+      error_message NULL.
+  [ ] A generated_files row exists on the Generated-PDFs project matching
+      pdf_storage_db, with email_sent = TRUE, email_sent_at populated and
+      scheduled_deletion_at roughly 24 hours in the future.
+  [ ] The email arrives in the student's inbox with the PDF attached and the
+      filename <safe_title>_project.pdf.
+  [ ] The "Cleanup expired PDFs" run logs a line like
+      "Cleanup complete - deleted: 0, failed: 0, scanned: 0" and reports storage
+      usage for PDF1..PDF4.
+  [ ] "Delete PDF after email" run with project_id, storage_path and db_num
+      finishes green, sets deleted_at on the generated_files row and flips the
+      projects row to 'downloaded' when it was 'paid'.
+
+6. TROUBLESHOOTING
+--------------------------------------------------------------------------------
+  ModuleNotFoundError: No module named 'supabase_client'
+      The run step is executing from the wrong directory. Every python step must
+      have "working-directory: scripts". Remember that the automation repository
+      receives the CONTENTS of the automation/ folder, so the paths inside the
+      workflows are scripts/requirements.txt and scripts/main.py - NOT
+      automation/scripts/... If you copied a workflow from the monorepo, remove
+      the automation/ prefix.
+
+  The workflow never starts after a dispatch
+      * The event_type in the dispatch body must be exactly "generate-pdf" (or
+        "delete-pdf-after-email"). A typo silently does nothing.
+      * The PAT used to dispatch must include the 'workflow' scope as well as
+        'repo'. Regenerate the token with both scopes and update
+        GITHUB_AUTO_TOKEN everywhere.
+      * repository_dispatch only triggers workflows on the repository's DEFAULT
+        branch. Make sure the workflow files are committed to main.
+      * Confirm Actions are enabled (step 4.2).
+
+  Status stuck at 'generating'
+      The job died before the failure handler could run (usually a 30-minute
+      timeout or a cancelled run). Read the error_message column on the projects
+      row first - main.py writes a truncated 500-character reason there on any
+      handled failure. If error_message is NULL, open the Actions log for the
+      run whose concurrency group is "generate-<project_id>".
+
+  "no textbooks downloaded" / empty textbook_paths
+      The subject project has no files in its reference bucket, or subject_code
+      does not match the folder name used at upload time. Check the subjects and
+      master_prompts rows for that subject_code and confirm the reference files
+      were uploaded by the admin site. Generation can still succeed with fewer
+      references but quality will drop.
+
+  Gemini quota exhausted / 429 responses
+      Every active Gemini key is rate limited or out of quota. Add more keys to
+      the api_keys table on the Our-API-Keys project (ai_provider 'gemini');
+      APIKeyManager rotates automatically and deactivates dead keys. Re-run the
+      project with workflow_dispatch afterwards.
+
+  Kie image generation failed
+      This is never fatal. STEP 8/10 logs a warning, image_paths becomes empty
+      and the PDF is still built and delivered - just without illustrations. Fix
+      the Kie key in the api_keys table and re-run only if images are required.
+
+================================================================================
+END OF SETUP GUIDE - MODULE 11
+================================================================================

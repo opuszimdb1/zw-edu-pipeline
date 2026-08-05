@@ -1,0 +1,163 @@
+# FILE: automation/SETUP_GUIDE_MODULE_8.txt
+================================================================================
+OPUS ZIM - MODULE 8 SETUP GUIDE - AUTOMATION AI LAYER
+================================================================================
+
+1. PURPOSE
+--------------------------------------------------------------------------------
+Module 8 is the AI layer of the Opus Zim automation pipeline. It performs three
+jobs and nothing else:
+
+  a) Calls Google Gemini to generate one complete project as RAW delimiter text,
+     using the master prompt stored in the master_prompts table and optional PDF
+     reference material (textbooks plus a marking guide).
+  b) Calls Kie AI to generate optional figure images for Stage 5.
+  c) Parses the RAW Gemini text into the canonical project dictionary that
+     Module 9 renders into the final PDF.
+
+Multi-key fallback is built in: every Gemini key supplied by the Module 7
+APIKeyManager is tried in turn, and quota / rate-limit failures move on to the
+next key immediately. Kie AI failures are non-fatal - Module 11 treats figure
+images as optional and continues without them.
+
+2. FILES DELIVERED
+--------------------------------------------------------------------------------
+  automation/scripts/ai_client.py
+      GeminiClient.generate_project(...) -> RAW response text.
+      Uploads up to 6 textbooks + 1 marking guide, polls upload state, falls
+      back from gemini-2.0-flash to gemini-1.5-flash, deletes uploads in a
+      finally block, and raises RuntimeError if the response is missing
+      @@STAGE_START:1@@.
+
+  automation/scripts/image_generator.py
+      KieImageGenerator.generate_image(prompt, width, height) -> image bytes.
+      POSTs to the gpt4o-image generate endpoint, polls record-info every 5s up
+      to 24 times, downloads the resulting image, marks key success, and rotates
+      through up to 3 distinct keys on failure.
+
+  automation/scripts/response_parser.py
+      parse_response(raw) -> dict matching the Module 9 contract exactly.
+      Includes _clean, _bullets and validate_parsed helpers plus a built-in
+      self-test under if __name__ == "__main__".
+
+  automation/SETUP_GUIDE_MODULE_8.txt   (this file)
+  automation/SETUP_MODULE_8.cmd         (verification script)
+
+3. PREREQUISITES
+--------------------------------------------------------------------------------
+  - Python 3.11 available on PATH as "python".
+  - Module 7 present and importable: APIKeyManager with get_all_gemini_keys(),
+    get_kie_key(), mark_kie_success(), mark_key_error() and deactivate_key().
+  - Python packages google-generativeai and requests installed. These are
+    declared by Module 11's requirements.txt - do NOT add a requirements.txt
+    inside Module 8.
+  - SETUP_CONFIG.txt at the repository root containing at least:
+        GEMINI_API_KEY_1=...
+        KIE_API_KEY_1=...
+  - The master prompt row in master_prompts must contain the placeholders
+    {{SUBJECT}}, {{LEVEL}} and {{PROJECT_TITLE}} and must instruct the model to
+    emit the @@STAGE_START:N@@ delimiter format. No other placeholders are
+    substituted by this module.
+
+4. MANUAL STEPS
+--------------------------------------------------------------------------------
+  STEP 1 - Obtain a Gemini API key
+      1. Open https://aistudio.google.com/app/apikey
+      2. Sign in with a Google account.
+      3. Click "Create API key" and copy the value.
+      4. Paste it into SETUP_CONFIG.txt as:
+             GEMINI_API_KEY_1=AIza...
+      5. Optional but recommended: create keys on 2-3 separate Google accounts
+         so that a single daily quota exhaustion does not stop production.
+
+  STEP 2 - Obtain Kie AI key(s)
+      1. Open https://kie.ai
+      2. Register or sign in, then open the API / credentials area.
+      3. Copy the API key and paste it into SETUP_CONFIG.txt as:
+             KIE_API_KEY_1=...
+      4. Kie keys are credit based. Keep at least two keys so image generation
+         survives one key running out of credit.
+
+  STEP 3 - Add extra keys LATER through the Admin Dashboard
+      Additional keys must be added on the Admin Dashboard "API Keys" page.
+      Never edit ai_client.py, image_generator.py or any other source file to
+      add a key, and never commit a key to the repository. The dashboard writes
+      the key into the database, and APIKeyManager (Module 7) picks it up on the
+      next run automatically - no redeploy is required.
+
+  STEP 4 - Upload reference PDFs
+      Textbooks and marking guides are uploaded on the Admin Dashboard. A
+      maximum of 6 textbooks are sent to Gemini per generation; extra files are
+      ignored with a warning. Each PDF must be 25MB or smaller.
+
+5. VERIFICATION
+--------------------------------------------------------------------------------
+  a) Run the module verification script:
+         automation\SETUP_MODULE_8.cmd
+     It confirms SETUP_CONFIG.txt is found, that GEMINI_API_KEY_1 and
+     KIE_API_KEY_1 are present, that all three Python files exist, and then runs
+     the parser self-test.
+
+  b) Run the parser self-test directly:
+         python automation\scripts\response_parser.py
+     Expected result: exit code 0 and a pretty-printed JSON dict containing
+     subject_name, level, project_title, year, stage1 (2 entries), stage2
+     (2 concepts), stage3 (2 approaches), stage4 (chosen + 2 refinements),
+     stage5 (intro, needs_images true, 2 image prompts, 2 captions) and stage6
+     (relevance, 2 challenges, 2 recommendations). No WARNING lines should be
+     printed for the built-in sample.
+
+  c) LIVE generation is NOT verified here. Real Gemini and Kie AI calls are
+     exercised end-to-end by the generate_pdf.yml GitHub Actions workflow.
+     Trigger that workflow and inspect its logs to confirm live credentials,
+     reference uploads and image generation.
+
+6. TROUBLESHOOTING
+--------------------------------------------------------------------------------
+  PROBLEM: Logs show RESOURCE_EXHAUSTED, "429" or "quota" errors.
+  CAUSE:   The Gemini key has hit its per-minute or per-day free-tier quota.
+  FIX:     The client marks the key with mark_key_error and moves to the next
+           key without retrying, which is expected behaviour. If every key is
+           exhausted the run raises "Gemini generation failed after trying N API
+           key(s)". Add more Gemini keys on the Admin Dashboard API Keys page,
+           or wait for the daily quota window to reset.
+
+  PROBLEM: RuntimeError "Gemini response did not contain @@STAGE_START:1@@".
+  CAUSE:   The model answered in prose, refused, or the master prompt no longer
+           instructs it to emit the delimiter format.
+  FIX:     Open the master_prompts record and confirm the delimiter contract is
+           still spelled out verbatim, including @@STAGE_START:1@@ through
+           @@STAGE_END:6@@. Also check the response was not cut off by
+           max_output_tokens - shorten the requested project scope if the model
+           keeps truncating. Re-run the job; a single bad sample is common.
+
+  PROBLEM: An uploaded PDF stays in PROCESSING.
+  CAUSE:   Large or scanned/image-heavy PDFs take a long time to index.
+  FIX:     The client waits 60s per file, then logs a warning and continues
+           WITHOUT that reference. If this happens on every run, reduce the PDF
+           size, split it into chapters, or re-save it as a text-based PDF
+           instead of a scan. Generation still succeeds without the reference,
+           only with less grounding.
+
+  PROBLEM: A Kie task never completes.
+  CAUSE:   The task is queued behind other work or the provider is degraded.
+  FIX:     The generator polls every 5s for 24 attempts (2 minutes) then raises
+           "Kie task <id> did not complete after 24 polls". It then retries with
+           the next key, up to 3 distinct keys. When all attempts fail the
+           caller (Module 11) logs the failure and produces the PDF without
+           figures. Check the task id in the logs against the Kie dashboard.
+           A 401/403 response deactivates that key automatically - generate a
+           replacement key at https://kie.ai and add it on the Admin Dashboard.
+
+  PROBLEM: An oversized reference PDF is rejected.
+  CAUSE:   The Admin Dashboard enforces a 25MB limit at upload time.
+  FIX:     Compress the PDF or split it before uploading. A file that never
+           reached storage can never be passed to Gemini, so this failure
+           appears at upload time in the dashboard, not in the automation logs.
+
+  PROBLEM: A key value appears in a log line.
+  CAUSE:   Should never happen - this module logs only key ids and task ids.
+  FIX:     Rotate the exposed key immediately at its provider, deactivate it on
+           the Admin Dashboard, and report the log line so the leak can be
+           patched.
+================================================================================

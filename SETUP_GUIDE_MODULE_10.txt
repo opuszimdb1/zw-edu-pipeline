@@ -1,0 +1,161 @@
+# FILE: automation/SETUP_GUIDE_MODULE_10.txt
+================================================================================
+OPUS ZIM — SETUP GUIDE, MODULE 10: AUTOMATION STORAGE & EMAIL
+================================================================================
+
+1. PURPOSE
+--------------------------------------------------------------------------------
+Module 10 is the storage and delivery layer of the Opus Zim automation pipeline.
+
+  * StorageManager moves objects in and out of the correct Supabase project
+    buckets: it uploads the generated PDF and its page-1 preview to the ACTIVE
+    Generated-PDFs project (PDF1..PDF4, chosen by Module 7's rotation at the
+    450 MB threshold), creates signed download URLs, downloads PDFs back for
+    emailing, deletes objects during the 24-hour cleanup, and downloads each
+    subject's reference textbooks and marking guide for Gemini.
+  * EmailSender delivers the finished PDF to the student as a base64 attachment
+    through the Resend HTTP API, using the branded "opuszim-project-delivery"
+    template.
+
+OWNERSHIP: Module 10 touches STORAGE OBJECTS ONLY. It never inserts or updates
+rows in generated_files or projects — every one of those writes belongs to
+Module 11's main.py, including email_sent / email_sent_at and deleted_at.
+
+
+2. FILES DELIVERED
+--------------------------------------------------------------------------------
+  automation/scripts/storage_manager.py   StorageManager (uploads, signed URLs,
+                                          downloads, deletes, reference files)
+  automation/scripts/email_sender.py      EmailSender (Resend HTTP API + branded
+                                          HTML/plaintext template)
+  automation/SETUP_GUIDE_MODULE_10.txt    This guide
+  automation/SETUP_MODULE_10.cmd          Validation / smoke-test script
+
+
+3. PREREQUISITES
+--------------------------------------------------------------------------------
+  * Python 3.11 on PATH.
+  * Packages: requests, supabase (declared by Module 11's requirements.txt; the
+    setup script installs them quietly if missing).
+  * Module 4 completed: all buckets created.
+      - Generated-PDFs-One..Four : 'generated-pdfs' (private),
+                                   'previews' (private)
+      - ASCI ACOM AART OSCI OCOM OART : 'reference-pdfs' (private, 25 MB limit)
+      - APK-Store : 'apk-files' (PUBLIC — not used by this module)
+  * Module 7 completed: automation/scripts/supabase_router.py provides
+    get_pdf_storage_client(), get_pdf_storage_db_number(),
+    get_pdf_client_by_number(n) and check_pdf_storage_usage(n).
+  * SETUP_CONFIG.txt at the repo root containing at least:
+      SB_PDF1_URL, SB_PDF1_SERVICE_KEY,
+      SB_APIKEYS_URL, SB_APIKEYS_SERVICE_KEY,
+      RESEND_API_KEY, RESEND_FROM_EMAIL
+
+
+4. MANUAL STEPS
+--------------------------------------------------------------------------------
+  4.1 CREATE THE RESEND ACCOUNT
+      - Sign up at https://resend.com and log in.
+      - Go to API Keys -> Create API Key (Sending access is enough).
+      - Copy the key ONCE and paste it into SETUP_CONFIG.txt as
+          RESEND_API_KEY=re_xxxxxxxxxxxxxxxxxxxxxxxx
+        Never commit this value and never print it in logs.
+
+  4.2 VERIFY A SENDING DOMAIN
+      - Go to Domains -> Add Domain and enter your domain (e.g. opuszim.co.zw).
+      - Add the DNS records Resend shows (SPF/DKIM TXT records, and the MX/TXT
+        return-path record) at your DNS provider, then click Verify.
+      - SANDBOX LIMITATION: until a domain is verified, Resend only allows
+        sending to the email address that owns the Resend account, and only
+        from onboarding@resend.dev. Testing to any other recipient will fail
+        with a 403 until verification completes.
+
+  4.3 SET RESEND_FROM_EMAIL
+      - Use an address on the VERIFIED domain, e.g.
+          RESEND_FROM_EMAIL=Opus Zim <projects@opuszim.co.zw>
+        or, while still in sandbox,
+          RESEND_FROM_EMAIL=onboarding@resend.dev
+      - Add it to SETUP_CONFIG.txt.
+
+  4.4 UPLOAD THE REFERENCE PDFs
+      - Open the Admin Dashboard and sign in as an admin.
+      - For EACH of the six subject projects (ASCI, ACOM, AART, OSCI, OCOM,
+        OART) upload:
+          * up to 6 textbook PDFs   (file_type = 'textbook')
+          * exactly 1 marking guide (file_type = 'marking_guide')
+      - Each file must be 25 MB or smaller (bucket limit). The dashboard writes
+        the reference_files row and stores the object at
+          {subject_code}/{file_type}/{file_name}
+        in the 'reference-pdfs' bucket, which is exactly what
+        download_reference_files() reads.
+
+
+5. VERIFICATION
+--------------------------------------------------------------------------------
+  5.1 Run the setup script:
+        automation\SETUP_MODULE_10.cmd
+      It validates the config keys, confirms both Python files exist, installs
+      requests + supabase, and runs email_sender.py in RENDER-ONLY mode (nothing
+      is sent). Expect "✅" lines and exit code 0.
+
+  5.2 Confirm the storage router resolves:
+        python automation\scripts\storage_manager.py
+      Prints the active PDF project number and its usage in MB against the
+      450 MB threshold. It reads env vars only and writes nothing.
+
+  5.3 Send a real test email:
+        set OPUSZIM_EMAIL_TEST_TO=you@yourdomain.com
+        set RESEND_API_KEY=re_xxxxxxxx
+        set RESEND_FROM_EMAIL=projects@opuszim.co.zw
+        python automation\scripts\email_sender.py
+      Confirm the inbox receives a branded email: blue (#2E5EAA) header band
+      with the "Opus Zim" wordmark and the tagline "Empowering learners for
+      quality results", a teal (#4CC9C0) accent rule, the project title, the
+      ⚠️ 24-hour deletion notice, the reference-only disclaimer, and a 1-page
+      PDF attachment.
+
+  5.4 Buckets that MUST exist before the pipeline runs:
+        Generated-PDFs-One   : generated-pdfs (private), previews (private)
+        Generated-PDFs-Two   : generated-pdfs (private), previews (private)
+        Generated-PDFs-Three : generated-pdfs (private), previews (private)
+        Generated-PDFs-Four  : generated-pdfs (private), previews (private)
+        ASCI / ACOM / AART / OSCI / OCOM / OART : reference-pdfs (private, 25MB)
+        APK-Store            : apk-files (PUBLIC)
+
+
+6. TROUBLESHOOTING
+--------------------------------------------------------------------------------
+  403 "domain is not verified"
+      Resend rejected the sender. Either finish DNS verification for the domain
+      in RESEND_FROM_EMAIL, or fall back to onboarding@resend.dev and send only
+      to the account owner's address while in sandbox. Re-check that
+      RESEND_FROM_EMAIL's domain matches the verified domain exactly.
+
+  Attachment size limits / 413 or 422 from Resend
+      Resend caps total message size at roughly 40 MB, and practical inbox
+      limits are near 25 MB. If a generated PDF is too large, reduce the
+      embedded image quality in the PDF builder (Module 9) and re-run; the
+      pipeline can still deliver a signed URL from get_signed_url() instead of
+      an attachment.
+
+  Signed URL returns 400 / "Object not found"
+      Almost always a wrong db_num. Signed URLs are only valid on the project
+      that actually holds the object, so pass the pdf_storage_db value that
+      upload_pdf() returned (and that Module 11 stored on the generated_files
+      row) — not the currently active project, which may have rotated since.
+
+  "Bucket not found"
+      The bucket was never created on that project. Re-run Module 4's setup for
+      the affected project so 'generated-pdfs', 'previews' and 'reference-pdfs'
+      exist with the correct privacy and size limits.
+
+  RuntimeError "No textbooks downloaded for subject XXXX"
+      That subject has no usable reference files: either no reference_files rows
+      with file_type = 'textbook' for that subject_code, or every object failed
+      to download. Upload the subject's textbooks via the Admin Dashboard
+      (step 4.4) and confirm each row's storage_path matches
+      {subject_code}/textbook/{file_name} in the 'reference-pdfs' bucket.
+
+  Preview upload failed but the PDF is fine
+      Expected and non-fatal. upload_preview() raises RuntimeError and Module
+      11's main.py catches it and continues with a NULL preview_path.
+================================================================================
